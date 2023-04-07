@@ -17,6 +17,7 @@
       <Visible>true</Visible>
     </Content>
     <Compile Include="GodotStubs.fs" />
+    <Compile Include="TypeNameToGodotType.fs" />
     <Compile Include="generator.fs" />
     <Compile Include="helpers.fs" />
     <Compile Include="mapper.fs" />
@@ -25,7 +26,8 @@
   <ItemGroup>
     <PackageReference Include="Myriad.Core" Version="0.8.2" PrivateAssets="all" />
     <PackageReference Include="Myriad.Sdk" Version="0.8.2" PrivateAssets="none" />
-    <PackageReference Update="FSharp.Core" Version="6.0.6" />
+    <PackageReference Update="FSharp.Core" Version="6.0.7" />
+    <PackageReference Include="FSharp.Compiler.Service" Version="41.0.7" />
   </ItemGroup>
   <Import Project="build/Godot.FSharp.SourceGenerators.props" />
 </Project>

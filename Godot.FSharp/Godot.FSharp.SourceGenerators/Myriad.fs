@@ -2,13 +2,15 @@
 
 open System
 open System.IO
-open FSharp.Compiler.Syntax
+open FSharp.Compiler.CodeAnalysis
 open Fantomas.Core
 open Myriad.Core
 open Godot.FSharp.SourceGenerators.GodotStubs
 
 open Generator
 open GodotStubs
+open FSharp.Compiler.Text
+open FSharp.Compiler.Syntax
 
 [<MyriadGenerator("fsharp.godot.example")>]
 type Example() =
@@ -17,64 +19,69 @@ type Example() =
 
         member _.Generate(context: GeneratorContext) =
 
-            let (ast: ParsedInput, _) =
-                Ast.fromFilename context.InputFilename
+            let checker = FSharpChecker.Create(keepAssemblyContents = true)
+
+            let file = context.InputFilename |> File.ReadAllText |> SourceText.ofString
+
+            let (options, _) =
+                checker.GetProjectOptionsFromScript(context.InputFilename, file)
                 |> Async.RunSynchronously
-                //myriad throws everything but the first thing away... guess it does that for a reason..
-                |> Array.head
 
-            let modules =
-                match ast with
-                | ParsedInput.ImplFile(ParsedImplFileInput(_name,
-                                                           _isScript,
-                                                           _qualifiedNameOfFile,
-                                                           _scopedPragmas,
-                                                           _hashDirectives,
-                                                           modules,
-                                                           _g,
-                                                           _)) -> modules
-                | _ -> "Not a valid file" |> Exception |> raise
+            let (checkProjectResults, answer) =
+                checker.ParseAndCheckFileInProject(context.InputFilename, 1, file, options)
+                |> Async.RunSynchronously
 
-            let modulesWithAttribute =
-                modules
-                |> List.filter (fun x ->
-                    let SynModuleOrNamespace(namespaceId,
-                                             _isRec: bool,
-                                             _isModule,
-                                             moduleDecls,
-                                             _preXmlDoc,
-                                             attributes,
-                                             _access,
-                                             _range,
-                                             _) as _ =
-                        x
+            let answer =
+                match answer with
+                | FSharpCheckFileAnswer.Aborted -> "Could not parse file" |> System.Exception |> raise
+                | FSharpCheckFileAnswer.Succeeded x -> x
 
-                    attributes
-                    |> List.exists (fun (x: SynAttributeList) ->
-                        x.Attributes
-                        |> Seq.exists (fun x -> Ast.typeNameMatches typeof<Helper.NodeScriptAttribute> x)))
+            let file = answer.ProjectContext.GetReferencedAssemblies().Head
 
-            let parsedNodeModules =
-                modulesWithAttribute
-                |> List.map (fun modul ->
-                    //get every type with the Node attribute
-                    let SynModuleOrNamespace(namespaceId,
-                                             _isRec,
-                                             _isModule,
-                                             moduleDecls,
-                                             _preXmlDoc,
-                                             _attributes,
-                                             _access,
-                                             _range,
-                                             _) as _ =
-                        modul
+            let scriptModules =
+                file.Contents.Entities
+                |> Seq.filter (fun x -> x.IsFSharpModule)
+                |> Seq.filter (fun x ->
+                    x.Attributes
+                    |> Seq.exists (fun x -> x.IsAttribute<Helper.NodeScriptAttribute>()))
+                |> Seq.map (fun modu ->
+                    let children = modu.GetPublicNestedEntities() |> Seq.toList
 
-                    let (state, node) = Helper.extractPart moduleDecls |> List.head
-                    //get all the methods here!
-                    let functions = Helper.extractFunctions moduleDecls
-                    (state, node, functions)
+                    let state =
+                        children
+                        |> List.filter (fun child ->
+                            child.IsFSharpRecord && child.HasAttribute<Helper.StateAttribute>())
 
-                )
+                    if state.Length > 1 then
+                        "More than 1 state found" |> System.Exception |> raise
+
+                    ()
+                    let state = state.Head
+
+                    let node =
+                        children
+                        |> List.filter (fun child ->
+                            child.HasAttribute<Helper.NodeAttribute>()
+                            && child.IsClass
+                            && Helper.isExtendingNode child)
+
+                    if node.Length > 1 then
+                        "More than 1 state found" |> System.Exception |> raise
+
+                    let node = node[0]
+
+                    let methods =
+                        modu.MembersFunctionsAndValues
+                        |> Seq.filter (fun x ->
+                            let para = x.CurriedParameterGroups |> Helper.flatten |> Seq.toArray
+
+                            if para.Length < 2 then
+                                false
+                            else
+                                let last = para[para.Length - 1]
+                                last.IsEffectivelySameAs state && x.ReturnParameter.IsEffectivelySameAs state)
+
+                    state, node, methods)
 
             try
                 let toGenerate: List<ToGenerateInfo> =
